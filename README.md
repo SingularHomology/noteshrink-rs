@@ -7,12 +7,12 @@
 This is a Rust rewrite of Matt Zucker's [noteshrink](https://github.com/mzucker/noteshrink) which converts scans of handwritten notes to beautiful, compact PDFs. For its inner-workings see this great [writeup](https://mzucker.github.io/2016/09/20/noteshrink.html) for more details.
 
 <p align="center" width="100%">
-  <img width="33%" src="https://github.com/SingularHomology/noteshrink-rs/blob/master/examples/notesA.jpg?raw=true"/>
-  <img width="33%" src="https://github.com/SingularHomology/noteshrink-rs/blob/master/examples/notesA-output.png?raw=true"/>
+  <img width="33%" src="https://github.com/SingularHomology/noteshrink-rs/blob/main/examples/notesA1.jpg?raw=true"/>
+  <img width="33%" src="https://github.com/SingularHomology/noteshrink-rs/blob/main/examples/notesA1-output.png?raw=true"/>
 </p>
 
 <p align="center">
-  <img src="https://github.com/SingularHomology/noteshrink-rs/blob/master/tty.gif?raw=true"/>
+  <img src="https://github.com/SingularHomology/noteshrink-rs/blob/main/tty.gif?raw=true"/>
 </p>
 
 # Current status
