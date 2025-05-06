@@ -1,0 +1,64 @@
+name: Release Builds
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: macos-arm64
+
+    env:
+      BINARY_NAME: noteshrink-rs
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust Nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build Release Binary
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
+
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ github.event.repository.name }}-${{ github.event.release.tag_name }}-${{ matrix.artifact_name }}.zip ${BINARY_NAME}.exe
+        shell: bash
+
+      - name: Package (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czvf ../../../${{ github.event.repository.name }}-${{ github.event.release.tag_name }}-${{ matrix.artifact_name }}.tar.gz ${BINARY_NAME}
+        shell: bash
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: ${{ github.event.repository.name }}-${{ github.event.release.tag_name }}-${{ matrix.artifact_name }}.${{ matrix.os == 'windows-latest' && 'zip' || 'tar.gz' }}
