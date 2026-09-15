@@ -25,7 +25,7 @@ pub fn apply_kmeans(
         let kmeans_iter = 40;
 
         let kmean: KMeans<_, 8, _> = KMeans::new(
-            points.to_owned(),
+            points,
             sample_cnt,
             sample_dims,
             EuclideanDistance,

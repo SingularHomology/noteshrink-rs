@@ -1,3 +1,4 @@
 /target
 /noteshrink-py
 /test4
+*.json.gz
