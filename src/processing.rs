@@ -178,26 +178,23 @@ pub fn apply_palette(img: &Array3<u8>, palette: &[Vec<u32>], options: &Options) 
         .dim();
     let fg_mask2 = fg_mask.to_shape(h * w).unwrap();
     let num_pixels = pixels.shape()[0];
-    let mut pixels2: Vec<Vec<f32>> = Vec::new();
-    for (i, &j) in pixels.outer_iter().zip(fg_mask2.iter()) {
-        if j {
-            pixels2.push(i.iter().map(|&x| x as f32).collect());
+    let centroids: Vec<[f32; 3]> = palette
+        .iter()
+        .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+        .collect();
+
+    let mut pixels_fg: Vec<[f32; 3]> = Vec::with_capacity(num_pixels);
+    for (pixel, &is_fg) in pixels.outer_iter().zip(fg_mask2.iter()) {
+        if is_fg {
+            pixels_fg.push([pixel[0] as f32, pixel[1] as f32, pixel[2] as f32]);
         }
     }
-    let mut labels: Array1<u8> = Array1::zeros(num_pixels);
-    let pixels_fg: Array2<f32> =
-        Array2::from_shape_vec((pixels2.len(), 3), pixels2.concat()).unwrap();
-    let centroids_array = Array2::from_shape_vec(
-        (palette.len(), 3),
-        palette.iter().flat_map(|v| v.iter()).cloned().collect(),
-    )
-    .unwrap();
 
-    // vq
-    let closest_centroids: Vec<u8> = vq(&pixels_fg, &centroids_array);
+    let closest_centroids = vq(&pixels_fg, &centroids);
+    let mut labels: Array1<u8> = Array1::zeros(num_pixels);
     let mut m = 0;
-    for (n, i) in fg_mask2.iter().enumerate() {
-        if *i {
+    for (n, &is_fg) in fg_mask2.iter().enumerate() {
+        if is_fg {
             labels[n] = closest_centroids[m];
             m += 1;
         }
@@ -205,5 +202,5 @@ pub fn apply_palette(img: &Array3<u8>, palette: &[Vec<u32>], options: &Options) 
     let mut o = orig_shape.to_vec();
     o.pop();
     let (x, y) = (o[0], o[1]);
-    Array2::from_shape_vec((x, y), labels.to_vec()).unwrap()
+    Array2::from_shape_vec((x, y), labels.into_raw_vec_and_offset().0).unwrap()
 }

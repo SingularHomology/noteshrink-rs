@@ -1,18 +1,15 @@
-use ndarray::{Array2, Axis};
+pub fn vq(pixels_fg: &[[f32; 3]], centroids: &[[f32; 3]]) -> Vec<u8> {
+    let mut closest_centroids = Vec::with_capacity(pixels_fg.len());
 
-pub fn vq(pixels_fg: &Array2<f32>, centroids_array: &Array2<u32>) -> Vec<u8> {
-    let mut closest_centroids = Vec::with_capacity(pixels_fg.nrows());
-
-    for p in pixels_fg.axis_iter(Axis(0)) {
+    for p in pixels_fg {
         let mut min_d = f32::MAX;
         let mut closest_index = 0;
 
-        for (i, centroid) in centroids_array.axis_iter(Axis(0)).enumerate() {
-            let d = p
-                .iter()
-                .zip(centroid.iter())
-                .map(|(p, c)| (p - *c as f32).powi(2))
-                .sum::<f32>();
+        for (i, c) in centroids.iter().enumerate() {
+            let dr = p[0] - c[0];
+            let dg = p[1] - c[1];
+            let db = p[2] - c[2];
+            let d = dr * dr + dg * dg + db * db;
 
             if d < min_d {
                 min_d = d;
@@ -23,3 +20,4 @@ pub fn vq(pixels_fg: &Array2<f32>, centroids_array: &Array2<u32>) -> Vec<u8> {
     }
     closest_centroids
 }
+
