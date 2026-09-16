@@ -2,16 +2,7 @@ use crate::arg::Options;
 use image::{ImageBuffer, Rgb};
 use ndarray::{Array2, ArrayD};
 
-pub fn save(
-    output_filename: &str,
-    labels: Array2<u8>,
-    palette: Vec<Vec<u32>>,
-    options: &Options,
-) -> Vec<Vec<u32>> {
-    let mut palette = palette;
-    if !options.quiet {
-        println!("  saving ...");
-    }
+pub fn adjust_palette(mut palette: Vec<Vec<u32>>, options: &Options) -> Vec<Vec<u32>> {
     if options.saturate {
         let rows = palette.len();
         let col = palette[0].len();
@@ -33,6 +24,19 @@ pub fn save(
     }
     if options.white_bg {
         palette[0] = vec![255, 255, 255];
+    }
+    palette
+}
+
+pub fn save(
+    output_filename: &str,
+    labels: Array2<u8>,
+    palette: Vec<Vec<u32>>,
+    options: &Options,
+) -> Vec<Vec<u32>> {
+    let palette = adjust_palette(palette, options);
+    if !options.quiet {
+        println!("  saving ...");
     }
     let (height, width) = (labels.nrows() as u32, labels.ncols() as u32);
     let labels_raw = labels.into_raw_vec_and_offset().0;
