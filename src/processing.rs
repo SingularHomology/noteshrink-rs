@@ -1,24 +1,28 @@
 use crate::arg::Options;
 use crate::kmeans_f::{apply_kmeans, kmeans_precheck};
 use crate::vq::vq;
-use ndarray::{s, Array1, Array2, Array3, ArrayD, Axis, IxDyn};
-use rand::{rng, seq::SliceRandom};
+use ndarray::{Array1, Array2, Array3, ArrayD, Axis, IxDyn};
+use rand::rng;
 use std::collections::HashMap;
 use std::ptr::eq;
 
 pub fn sample_pixels(img: &Array3<u8>, option_sample_fraction: usize) -> Array2<u8> {
     let (h, w, c) = img.dim();
-    let img2 = img.to_shape((h * w, c)).unwrap();
-    let num_samples = ((h as f64) * (w as f64) * (option_sample_fraction as f64) * 0.01) as usize;
     let num_pix = h * w;
-    let mut idx = ndarray::Array1::range(0., num_pix as f64, 1.);
-    (idx.as_slice_mut().unwrap()).shuffle(&mut rng());
+    let num_samples = ((num_pix as f64) * (option_sample_fraction as f64) * 0.01) as usize;
 
-    let x = idx.slice(s![..num_samples]);
-    let y: Vec<usize> = x.iter().map(|&i| i as usize).collect();
-    let z: Vec<_> = y.iter().map(|&i| img2.row(i).to_owned()).collect();
-    let z: Vec<_> = z.iter().map(|a| a.view()).collect();
-    ndarray::stack(Axis(0), &z).unwrap()
+    let sample_indices = rand::seq::index::sample(&mut rng(), num_pix, num_samples);
+    let mut sample_data = Vec::with_capacity(num_samples * c);
+
+    for idx in sample_indices.iter() {
+        let row = idx / w;
+        let col = idx % w;
+        sample_data.push(img[[row, col, 0]]);
+        sample_data.push(img[[row, col, 1]]);
+        sample_data.push(img[[row, col, 2]]);
+    }
+
+    Array2::from_shape_vec((num_samples, c), sample_data).unwrap()
 }
 
 pub fn rgb_to_sv(rgb: &ArrayD<u8>) -> (ArrayD<f32>, ArrayD<f32>) {
