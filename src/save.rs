@@ -1,6 +1,8 @@
 use crate::arg::Options;
-use image::{ImageBuffer, Rgb};
 use ndarray::{Array2, ArrayD};
+use png::{BitDepth, ColorType, Encoder};
+use std::fs::File;
+use std::io::BufWriter;
 
 pub fn adjust_palette(mut palette: Vec<Vec<u32>>, options: &Options) -> Vec<Vec<u32>> {
     if options.saturate {
@@ -41,22 +43,23 @@ pub fn save(
     let (height, width) = (labels.nrows() as u32, labels.ncols() as u32);
     let labels_raw = labels.into_raw_vec_and_offset().0;
 
-    let palette_u8: Vec<[u8; 3]> = palette
+    let flat_palette: Vec<u8> = palette
         .iter()
-        .map(|c| [c[0] as u8, c[1] as u8, c[2] as u8])
+        .flat_map(|c| [c[0] as u8, c[1] as u8, c[2] as u8])
         .collect();
 
-    let mut flabels: Vec<u8> = Vec::with_capacity(labels_raw.len() * 3);
-    for idx in labels_raw {
-        let color = palette_u8[idx as usize];
-        flabels.extend_from_slice(&color);
-    }
-    let img_buffer: ImageBuffer<Rgb<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(width, height, flabels).unwrap();
+    let file = File::create(output_filename).expect("Error creating output image file.");
+    let mut w = BufWriter::new(file);
 
-    img_buffer
-        .save(output_filename)
-        .expect("Error saving image.");
+    let mut encoder = Encoder::new(&mut w, width, height);
+    encoder.set_color(ColorType::Indexed);
+    encoder.set_depth(BitDepth::Eight);
+    encoder.set_palette(&flat_palette);
+
+    let mut writer = encoder.write_header().expect("Error writing PNG header.");
+    writer
+        .write_image_data(&labels_raw)
+        .expect("Error writing PNG image data.");
 
     match options.return_palette {
         false => Vec::new(),

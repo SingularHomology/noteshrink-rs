@@ -804,6 +804,7 @@ dependencies = [
  "ndarray",
  "nshare",
  "palette",
+ "png",
  "rand",
  "rayon",
 ]
