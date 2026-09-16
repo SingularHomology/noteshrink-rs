@@ -34,28 +34,21 @@ pub fn save(
     if options.white_bg {
         palette[0] = vec![255, 255, 255];
     }
-    let binding = labels.clone();
-    let orig_shape = binding.shape();
-    let labels = labels.into_raw_vec_and_offset().0;
-    let mut llabels: Vec<Vec<u8>> = Vec::new();
-    for (n, i) in labels.into_iter().enumerate() {
-        llabels.insert(
-            n,
-            palette[i as usize]
-                .clone()
-                .iter()
-                .map(|&x| x as u8)
-                .collect(),
-        );
-    }
-    let mut flabels: Vec<u8> = Vec::new();
-    for i in llabels {
-        for j in i {
-            flabels.push(j);
-        }
+    let (height, width) = (labels.nrows() as u32, labels.ncols() as u32);
+    let labels_raw = labels.into_raw_vec_and_offset().0;
+
+    let palette_u8: Vec<[u8; 3]> = palette
+        .iter()
+        .map(|c| [c[0] as u8, c[1] as u8, c[2] as u8])
+        .collect();
+
+    let mut flabels: Vec<u8> = Vec::with_capacity(labels_raw.len() * 3);
+    for idx in labels_raw {
+        let color = palette_u8[idx as usize];
+        flabels.extend_from_slice(&color);
     }
     let img_buffer: ImageBuffer<Rgb<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(orig_shape[1] as u32, orig_shape[0] as u32, flabels).unwrap();
+        ImageBuffer::from_raw(width, height, flabels).unwrap();
 
     img_buffer
         .save(output_filename)
