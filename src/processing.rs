@@ -142,17 +142,14 @@ pub fn get_palette(samples: &Array2<u8>, options: &Options) -> Vec<Vec<u32>> {
         .into_dyn();
     let fg_mask = get_fg_mask(&b, &samples.clone().into_dyn(), options);
 
-    let points: Vec<Vec<f64>> = samples
-        .rows()
-        .into_iter()
-        .map(|row| row.iter().map(|&val| val as f64).collect())
-        .collect();
-    let pointsf3: Vec<Vec<f64>> = points
-        .iter()
-        .enumerate()
-        .filter_map(|(i, j)| if fg_mask[i] { Some(j.clone()) } else { None })
-        .collect();
-    let pointsf2: Vec<f64> = pointsf3.into_iter().flatten().collect();
+    let mut pointsf2 = Vec::with_capacity(samples.nrows() * 3);
+    for (i, row) in samples.rows().into_iter().enumerate() {
+        if fg_mask[i] {
+            pointsf2.push(row[0] as f64);
+            pointsf2.push(row[1] as f64);
+            pointsf2.push(row[2] as f64);
+        }
+    }
 
     apply_kmeans(
         &pointsf2,

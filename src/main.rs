@@ -14,13 +14,13 @@ use std::collections::HashMap;
 fn main() {
     let options = arg::parse_arguments();
     println!("Starting...");
-    let pb = ProgressBar::new(options.clone().filenames.len().try_into().unwrap());
+    let pb = ProgressBar::new(options.filenames.len() as u64);
     pb.inc(0);
     let mut palette_store: HashMap<String, Vec<Vec<u32>>> = HashMap::new();
-    for (c, i) in options.clone().filenames.iter().enumerate() {
-        let j = load_img(i, &options).unwrap();
+    for filename in &options.filenames {
+        let j = load_img(filename, &options).unwrap();
         pb.inc(1);
-        palette_store.insert(options.clone().filenames[c].clone(), j.2);
+        palette_store.insert(filename.clone(), j.2);
     }
     pb.finish_with_message("Done");
     println!("Done!");
