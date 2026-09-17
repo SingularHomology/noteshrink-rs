@@ -19,10 +19,9 @@ name = "noteshrink-rs"
 path = "src/main.rs"
 
 [dependencies]
-ndarray = "0.16.1"
-nshare = "0.10.0"
+ndarray = "0.17.2"
 image = "0.25.10"
-rand = "0.9.1"
+rand = "0.10.2"
 clap = { version = "4.6.7", features = ["derive"] }
 kmeans_colors = "0.7.1"
 palette = "0.7.7"
@@ -30,3 +29,5 @@ indicatif = "0.18.6"
 colored = "3.1.1"
 rayon = "1.12"
 png = "0.18.1"
+pdf-writer = "0.15"
+miniz_oxide = "0.9"

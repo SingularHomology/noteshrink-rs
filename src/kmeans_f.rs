@@ -3,7 +3,11 @@ use kmeans_colors::get_kmeans;
 use palette::Srgb;
 
 pub fn kmeans_precheck(points: &[f64], options: &Options) -> bool {
-    let k = options.num_colors.parse::<usize>().unwrap_or(8).saturating_sub(1);
+    let k = options
+        .num_colors
+        .parse::<usize>()
+        .unwrap_or(8)
+        .saturating_sub(1);
     points.is_empty() || k == 0 || points.len() < k * 3
 }
 
@@ -33,7 +37,13 @@ pub fn apply_kmeans(
 
     let rgb_points: Vec<Srgb<f32>> = points
         .chunks_exact(3)
-        .map(|c| Srgb::new((c[0] / 255.0) as f32, (c[1] / 255.0) as f32, (c[2] / 255.0) as f32))
+        .map(|c| {
+            Srgb::new(
+                (c[0] / 255.0) as f32,
+                (c[1] / 255.0) as f32,
+                (c[2] / 255.0) as f32,
+            )
+        })
         .collect();
 
     let max_iter = 40;

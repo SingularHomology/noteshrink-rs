@@ -1,10 +1,8 @@
 use crate::arg::Options;
 use crate::kmeans_f::{apply_kmeans, kmeans_precheck};
-use crate::save::adjust_palette;
 use crate::vq::vq;
-use image::{ImageBuffer, Rgb, RgbImage};
+use image::{ImageBuffer, RgbImage};
 use ndarray::{Array1, Array2, Array3, ArrayD, Axis, IxDyn};
-use nshare::IntoNdarray3;
 use rand::rng;
 use std::collections::HashMap;
 use std::ptr::eq;
@@ -209,19 +207,22 @@ pub fn apply_palette(img: &Array3<u8>, palette: &[Vec<u32>], options: &Options) 
     Array2::from_shape_vec((x, y), labels.into_raw_vec_and_offset().0).unwrap()
 }
 
-pub fn shrink_image(
-    img: &RgbImage,
-    options: &Options,
-) -> (ImageBuffer<Rgb<u8>, Vec<u8>>, Vec<Vec<u32>>) {
-    let array: Array3<u8> = img.clone().into_ndarray3().permuted_axes([1, 2, 0]);
-    let sample_fraction = options.sample_fraction.parse().unwrap_or(5);
+pub fn shrink_image(img: &RgbImage, options: &Options) -> (RgbImage, Vec<Vec<u32>>) {
+    let (width, height) = img.dimensions();
+    let array: Array3<u8> =
+        Array3::from_shape_vec((height as usize, width as usize, 3), img.clone().into_raw())
+            .unwrap();
+    let sample_fraction = options.sample_fraction.parse::<usize>().unwrap_or(5);
     let samples = sample_pixels(&array, sample_fraction);
-    let palette = get_palette(&samples, options);
-    let labels = apply_palette(&array, &palette, options);
-    let palette = adjust_palette(palette, options);
+    let mut palette = get_palette(&samples, options);
 
-    let (height, width) = (labels.nrows() as u32, labels.ncols() as u32);
+    if options.white_bg && !palette.is_empty() {
+        palette[0] = vec![255, 255, 255];
+    }
+
+    let labels = apply_palette(&array, &palette, options);
     let labels_raw = labels.into_raw_vec_and_offset().0;
+
     let palette_u8: Vec<[u8; 3]> = palette
         .iter()
         .map(|c| [c[0] as u8, c[1] as u8, c[2] as u8])
@@ -229,10 +230,14 @@ pub fn shrink_image(
 
     let mut out_pixels: Vec<u8> = Vec::with_capacity(labels_raw.len() * 3);
     for idx in labels_raw {
-        let color = palette_u8[idx as usize];
+        let color = palette_u8
+            .get(idx as usize)
+            .copied()
+            .unwrap_or([255, 255, 255]);
         out_pixels.extend_from_slice(&color);
     }
 
     let out_img = ImageBuffer::from_raw(width, height, out_pixels).unwrap();
     (out_img, palette)
 }
+
