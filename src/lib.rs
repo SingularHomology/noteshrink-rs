@@ -5,7 +5,6 @@ pub mod pdf;
 pub mod processing;
 pub mod save;
 pub mod types;
-pub mod vq;
 
 pub use arg::{parse_arguments, Options};
 pub use load::{extract_dpi, get_dpi, load_img};
