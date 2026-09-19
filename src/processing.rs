@@ -1,13 +1,13 @@
 use crate::arg::Options;
 use crate::kmeans_f::{apply_kmeans, kmeans_precheck};
 use image::{ImageBuffer, RgbImage};
-use ndarray::{Array1, Array2, Array3, ArrayD, Axis, IxDyn};
+use ndarray::{Array1, Array2, ArrayD, ArrayView3, Axis, IxDyn};
 use rand::rng;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::ptr::eq;
 
-pub fn sample_pixels(img: &Array3<u8>, option_sample_fraction: usize) -> Array2<u8> {
+pub fn sample_pixels(img: ArrayView3<'_, u8>, option_sample_fraction: usize) -> Array2<u8> {
     let (h, w, c) = img.dim();
     let num_pix = h * w;
     let num_samples = ((num_pix as f64) * (option_sample_fraction as f64) * 0.01) as usize;
@@ -160,7 +160,11 @@ pub fn get_palette(samples: &Array2<u8>, options: &Options) -> Vec<Vec<u32>> {
     )
 }
 
-pub fn apply_palette(img: &Array3<u8>, palette: &[Vec<u32>], options: &Options) -> Array2<u8> {
+pub fn apply_palette(
+    img: ArrayView3<'_, u8>,
+    palette: &[Vec<u32>],
+    options: &Options,
+) -> Array2<u8> {
     if !options.quiet {
         println!("applying palette....");
     }
@@ -233,17 +237,16 @@ pub fn apply_palette(img: &Array3<u8>, palette: &[Vec<u32>], options: &Options) 
 pub fn shrink_image(img: &RgbImage, options: &Options) -> (RgbImage, Vec<Vec<u32>>) {
     let (width, height) = img.dimensions();
     let array =
-        Array3::from_shape_vec((height as usize, width as usize, 3), img.as_raw().to_vec())
-            .unwrap();
+        ArrayView3::from_shape((height as usize, width as usize, 3), img.as_raw()).unwrap();
     let sample_fraction = options.sample_fraction.parse::<usize>().unwrap_or(5);
-    let samples = sample_pixels(&array, sample_fraction);
+    let samples = sample_pixels(array, sample_fraction);
     let mut palette = get_palette(&samples, options);
 
     if options.white_bg && !palette.is_empty() {
         palette[0] = vec![255, 255, 255];
     }
 
-    let labels = apply_palette(&array, &palette, options);
+    let labels = apply_palette(array, &palette, options);
     let labels_raw = labels.into_raw_vec_and_offset().0;
 
     let palette_u8: Vec<[u8; 3]> = palette

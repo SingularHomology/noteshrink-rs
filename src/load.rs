@@ -86,9 +86,9 @@ pub fn load_img(
         Array3::from_shape_vec((height as usize, width as usize, 3), img.into_raw()).unwrap();
     let dpi = get_dpi(filename, options);
     let sample_fraction = options.sample_fraction.parse().unwrap_or(5);
-    let samples = sample_pixels(&array, sample_fraction);
+    let samples = sample_pixels(array.view(), sample_fraction);
     let palette = get_palette(&samples, options);
-    let labels = apply_palette(&array, &palette, options);
+    let labels = apply_palette(array.view(), &palette, options);
     let labels_raw = labels.into_raw_vec_and_offset().0;
     let palette_saved = save(
         output_png,
