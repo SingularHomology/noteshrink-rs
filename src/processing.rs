@@ -1,9 +1,9 @@
 use crate::arg::Options;
 use crate::kmeans_f::{apply_kmeans, kmeans_precheck};
-use crate::vq::vq;
 use image::{ImageBuffer, RgbImage};
 use ndarray::{Array1, Array2, Array3, ArrayD, Axis, IxDyn};
 use rand::rng;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::ptr::eq;
 
@@ -164,53 +164,76 @@ pub fn apply_palette(img: &Array3<u8>, palette: &[Vec<u32>], options: &Options) 
     if !options.quiet {
         println!("applying palette....");
     }
-    let bg_color: Vec<u8> = palette.first().unwrap().iter().map(|&x| x as u8).collect();
-    let fg_mask = get_fg_mask(
-        &Array1::from_shape_vec(3, bg_color).unwrap().into_dyn(),
-        &img.clone().into_dyn(),
-        options,
-    );
-    let orig_shape = img.shape();
-    let (h, w, c) = img.dim();
-    let pixels = img.to_shape((h * w, c)).unwrap();
-    let (h, w) = fg_mask
-        .clone()
-        .into_dimensionality::<ndarray::Ix2>()
-        .unwrap()
-        .dim();
-    let fg_mask2 = fg_mask.to_shape(h * w).unwrap();
-    let num_pixels = pixels.shape()[0];
-    let centroids: Vec<[f32; 3]> = palette
+
+    let (h, w, _) = img.dim();
+    let bg_color = &palette[0];
+    let bg_r = bg_color[0] as f32;
+    let bg_g = bg_color[1] as f32;
+    let bg_b = bg_color[2] as f32;
+
+    let bg_cmax = bg_r.max(bg_g).max(bg_b);
+    let bg_cmin = bg_r.min(bg_g).min(bg_b);
+    let bg_delta = bg_cmax - bg_cmin;
+    let s_bg = if bg_cmax == 0.0 { 0.0 } else { bg_delta / bg_cmax };
+    let v_bg = bg_cmax / 255.0;
+
+    let p1 = options.sat_threshold.parse::<f32>().unwrap_or(20.0) * 0.01;
+    let p2 = options.value_threshold.parse::<f32>().unwrap_or(25.0) * 0.01;
+
+    let centroids: Vec<[i32; 3]> = palette
         .iter()
-        .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+        .map(|v| [v[0] as i32, v[1] as i32, v[2] as i32])
         .collect();
 
-    let mut pixels_fg: Vec<[f32; 3]> = Vec::with_capacity(num_pixels);
-    for (pixel, &is_fg) in pixels.outer_iter().zip(fg_mask2.iter()) {
-        if is_fg {
-            pixels_fg.push([pixel[0] as f32, pixel[1] as f32, pixel[2] as f32]);
-        }
-    }
+    let img_slice = img.as_slice().unwrap();
 
-    let closest_centroids = vq(&pixels_fg, &centroids);
-    let mut labels: Array1<u8> = Array1::zeros(num_pixels);
-    let mut m = 0;
-    for (n, &is_fg) in fg_mask2.iter().enumerate() {
-        if is_fg {
-            labels[n] = closest_centroids[m];
-            m += 1;
-        }
-    }
-    let mut o = orig_shape.to_vec();
-    o.pop();
-    let (x, y) = (o[0], o[1]);
-    Array2::from_shape_vec((x, y), labels.into_raw_vec_and_offset().0).unwrap()
+    let labels: Vec<u8> = img_slice
+        .par_chunks_exact(3)
+        .map(|rgb| {
+            let r_f = rgb[0] as f32;
+            let g_f = rgb[1] as f32;
+            let b_f = rgb[2] as f32;
+
+            let cmax = r_f.max(g_f).max(b_f);
+            let cmin = r_f.min(g_f).min(b_f);
+            let delta = cmax - cmin;
+            let sat = if cmax == 0.0 { 0.0 } else { delta / cmax };
+            let val = cmax / 255.0;
+
+            let is_fg = (s_bg - sat).abs() >= p1 || (v_bg - val).abs() >= p2;
+
+            if !is_fg {
+                return 0u8;
+            }
+
+            let r = rgb[0] as i32;
+            let g = rgb[1] as i32;
+            let b = rgb[2] as i32;
+
+            let mut min_d = i32::MAX;
+            let mut closest = 0u8;
+
+            for (idx, c) in centroids.iter().enumerate() {
+                let dr = r - c[0];
+                let dg = g - c[1];
+                let db = b - c[2];
+                let d = dr * dr + dg * dg + db * db;
+                if d < min_d {
+                    min_d = d;
+                    closest = idx as u8;
+                }
+            }
+            closest
+        })
+        .collect();
+
+    Array2::from_shape_vec((h, w), labels).unwrap()
 }
 
 pub fn shrink_image(img: &RgbImage, options: &Options) -> (RgbImage, Vec<Vec<u32>>) {
     let (width, height) = img.dimensions();
-    let array: Array3<u8> =
-        Array3::from_shape_vec((height as usize, width as usize, 3), img.clone().into_raw())
+    let array =
+        Array3::from_shape_vec((height as usize, width as usize, 3), img.as_raw().to_vec())
             .unwrap();
     let sample_fraction = options.sample_fraction.parse::<usize>().unwrap_or(5);
     let samples = sample_pixels(&array, sample_fraction);
@@ -228,16 +251,16 @@ pub fn shrink_image(img: &RgbImage, options: &Options) -> (RgbImage, Vec<Vec<u32
         .map(|c| [c[0] as u8, c[1] as u8, c[2] as u8])
         .collect();
 
-    let mut out_pixels: Vec<u8> = Vec::with_capacity(labels_raw.len() * 3);
-    for idx in labels_raw {
-        let color = palette_u8
-            .get(idx as usize)
-            .copied()
-            .unwrap_or([255, 255, 255]);
-        out_pixels.extend_from_slice(&color);
-    }
+    let out_pixels: Vec<u8> = labels_raw
+        .par_iter()
+        .flat_map_iter(|&idx| {
+            palette_u8
+                .get(idx as usize)
+                .copied()
+                .unwrap_or([255, 255, 255])
+        })
+        .collect();
 
     let out_img = ImageBuffer::from_raw(width, height, out_pixels).unwrap();
     (out_img, palette)
 }
-
