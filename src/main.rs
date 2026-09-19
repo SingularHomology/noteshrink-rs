@@ -1,4 +1,3 @@
-use colored::*;
 use indicatif::ProgressBar;
 use noteshrink_rs::arg;
 use noteshrink_rs::load::load_img;
@@ -49,7 +48,7 @@ fn main() {
             print!("{}", i.rsplit('/').next().unwrap());
             print!(": ");
             for k in &j {
-                print!("{}", "██".truecolor(k[0] as u8, k[1] as u8, k[2] as u8));
+                print!("\x1b[38;2;{};{};{}m██\x1b[0m", k[0], k[1], k[2]);
             }
             println!("\n{:?}", j);
         }
