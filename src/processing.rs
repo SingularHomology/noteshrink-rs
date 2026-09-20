@@ -1,6 +1,7 @@
 use crate::arg::Options;
 use crate::kmeans_f::{apply_kmeans, kmeans_precheck};
-use image::{ImageBuffer, RgbImage};
+use crate::types::{Palette, ShrinkParams};
+use image::{imageops::FilterType, ImageBuffer, RgbImage};
 use ndarray::{Array1, Array2, ArrayD, ArrayView3, Axis, IxDyn};
 use rand::rng;
 use rayon::prelude::*;
@@ -234,22 +235,22 @@ pub fn apply_palette(
     Array2::from_shape_vec((h, w), labels).unwrap()
 }
 
-pub fn shrink_image(img: &RgbImage, options: &Options) -> (RgbImage, Vec<Vec<u32>>) {
+pub fn shrink_image_in_memory(img: &RgbImage, params: &ShrinkParams) -> (RgbImage, Palette) {
     let (width, height) = img.dimensions();
     let array =
         ArrayView3::from_shape((height as usize, width as usize, 3), img.as_raw()).unwrap();
-    let sample_fraction = options.sample_fraction.parse::<usize>().unwrap_or(5);
-    let samples = sample_pixels(array, sample_fraction);
-    let mut palette = get_palette(&samples, options);
+    let options = Options::from(params);
+    let samples = sample_pixels(array, params.sample_fraction);
+    let mut palette = get_palette(&samples, &options);
 
-    if options.white_bg && !palette.is_empty() {
+    if params.white_bg && !palette.is_empty() {
         palette[0] = vec![255, 255, 255];
     }
 
-    let labels = apply_palette(array, &palette, options);
+    let labels = apply_palette(array, &palette, &options);
     let labels_raw = labels.into_raw_vec_and_offset().0;
 
-    let palette_u8: Vec<[u8; 3]> = palette
+    let palette_u8: Palette = palette
         .iter()
         .map(|c| [c[0] as u8, c[1] as u8, c[2] as u8])
         .collect();
@@ -265,5 +266,37 @@ pub fn shrink_image(img: &RgbImage, options: &Options) -> (RgbImage, Vec<Vec<u32
         .collect();
 
     let out_img = ImageBuffer::from_raw(width, height, out_pixels).unwrap();
-    (out_img, palette)
+    (out_img, palette_u8)
+}
+
+pub fn shrink_preview(
+    img: &RgbImage,
+    params: &ShrinkParams,
+    max_dimension: u32,
+) -> (RgbImage, Palette) {
+    let (width, height) = img.dimensions();
+    if max_dimension == 0 || (width <= max_dimension && height <= max_dimension) {
+        return shrink_image_in_memory(img, params);
+    }
+
+    let (new_w, new_h) = if width >= height {
+        let h = ((height as u64 * max_dimension as u64) / width as u64).max(1) as u32;
+        (max_dimension, h)
+    } else {
+        let w = ((width as u64 * max_dimension as u64) / height as u64).max(1) as u32;
+        (w, max_dimension)
+    };
+
+    let resized = image::imageops::resize(img, new_w, new_h, FilterType::Triangle);
+    shrink_image_in_memory(&resized, params)
+}
+
+pub fn shrink_image(img: &RgbImage, options: &Options) -> (RgbImage, Vec<Vec<u32>>) {
+    let params = ShrinkParams::from(options);
+    let (out_img, palette_u8) = shrink_image_in_memory(img, &params);
+    let palette_u32 = palette_u8
+        .into_iter()
+        .map(|c| vec![c[0] as u32, c[1] as u32, c[2] as u32])
+        .collect();
+    (out_img, palette_u32)
 }
