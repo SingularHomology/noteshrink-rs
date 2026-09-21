@@ -1,6 +1,6 @@
 [package]
 name = "noteshrink-rs"
-version = "0.3.2"
+version = "0.4.0"
 authors = ["Oussama Moutaoikil <m.oussama@proton.me>"]
 description = "Convert scanned, handwritten notes to compact, beautiful images and PDFs."
 repository = "https://github.com/singularhomology/noteshrink-rs.git"
