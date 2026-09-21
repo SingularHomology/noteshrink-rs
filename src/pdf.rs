@@ -1,10 +1,12 @@
-use crate::types::DPI;
+use crate::types::{ShrinkParams, DPI};
 use miniz_oxide::deflate::compress_to_vec_zlib;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 #[derive(Clone)]
 pub struct PdfPage {
@@ -90,4 +92,75 @@ pub fn export_pdf(
     let mut file = File::create(output_path)?;
     file.write_all(&pdf.finish())?;
     Ok(())
+}
+
+pub fn export_pdf_parallel<F>(
+    images: &[image::RgbImage],
+    params_list: &[ShrinkParams],
+    output_path: &Path,
+    on_progress: Option<F>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    F: FnMut(usize, usize, &str) + Send,
+{
+    if images.is_empty() {
+        return Ok(());
+    }
+
+    let total = images.len();
+    let progress_mutex = Mutex::new(on_progress);
+    let completed = AtomicUsize::new(0);
+    let default_params = ShrinkParams::default();
+
+    let pdf_pages: Result<Vec<PdfPage>, Box<dyn std::error::Error + Send + Sync>> = images
+        .par_iter()
+        .enumerate()
+        .map(|(idx, img)| {
+            let params = params_list.get(idx).unwrap_or(&default_params);
+            let (width, height) = img.dimensions();
+            let array = ndarray::ArrayView3::from_shape(
+                (height as usize, width as usize, 3),
+                img.as_raw(),
+            )
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+            let options = crate::arg::Options::from(params);
+            let samples = crate::processing::sample_pixels(array, params.sample_fraction);
+            let mut palette = crate::processing::get_palette(&samples, &options);
+
+            if params.white_bg && !palette.is_empty() {
+                palette[0] = vec![255, 255, 255];
+            }
+
+            let labels = crate::processing::apply_palette(array, &palette, &options);
+            let labels_raw = labels.into_raw_vec_and_offset().0;
+
+            let adjusted_palette = crate::save::adjust_palette(palette, &options);
+            let palette_u8: Vec<[u8; 3]> = adjusted_palette
+                .iter()
+                .map(|c| [c[0] as u8, c[1] as u8, c[2] as u8])
+                .collect();
+
+            let page = PdfPage {
+                width,
+                height,
+                dpi: DPI::default(),
+                palette: palette_u8,
+                labels: labels_raw,
+            };
+
+            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
+            if let Ok(mut guard) = progress_mutex.lock() {
+                if let Some(cb) = guard.as_mut() {
+                    let msg = format!("Processed page {} of {}...", done, total);
+                    cb(done, total, &msg);
+                }
+            }
+
+            Ok(page)
+        })
+        .collect();
+
+    let pages = pdf_pages?;
+    export_pdf(&pages, output_path)
 }
