@@ -1,6 +1,6 @@
 use crate::arg::Options;
 use crate::types::ShrinkParams;
-use ndarray::{Array2, ArrayD, ArrayView3};
+use ndarray::{Array2, ArrayView3};
 use png::{BitDepth, ColorType, Encoder};
 use rayon::prelude::*;
 use std::fs::File;
@@ -10,26 +10,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 pub fn adjust_palette(mut palette: Vec<Vec<u32>>, options: &Options) -> Vec<Vec<u32>> {
-    if options.saturate {
-        let rows = palette.len();
-        let col = palette[0].len();
-        let palettef: Vec<u32> = palette.iter().flat_map(|v| v.iter()).copied().collect();
-        let palette2: ArrayD<u32> =
-            Array2::from_shape_vec((rows, col), palettef.into_iter().collect())
-                .unwrap()
-                .into_dyn();
-        let pmax = palette2.iter().fold(u32::MIN, |a, &b| a.max(b)) as f32;
-        let pmin = palette2.iter().fold(u32::MAX, |a, &b| a.min(b)) as f32;
-        let palette3 = 255_f32 * (palette2.mapv(|x| x as f32) - pmin) / (pmax - pmin);
-        palette = palette3
-            .mapv(|x| x as u32)
-            .into_raw_vec_and_offset()
-            .0
-            .chunks(3)
-            .map(|c| c.to_vec())
-            .collect();
+    if options.saturate && !palette.is_empty() {
+        let pmin = palette.iter().flatten().copied().min().unwrap_or(0) as f32;
+        let pmax = palette.iter().flatten().copied().max().unwrap_or(255) as f32;
+        let range = pmax - pmin;
+        if range > 0.0 {
+            for color in &mut palette {
+                for channel in color {
+                    *channel = (255.0 * (*channel as f32 - pmin) / range) as u32;
+                }
+            }
+        }
     }
-    if options.white_bg {
+    if options.white_bg && !palette.is_empty() {
         palette[0] = vec![255, 255, 255];
     }
     palette
