@@ -81,6 +81,11 @@ pub fn load_img(
     let img = image::open(filename)
         .expect("Couldn't load the image!")
         .into_rgb8();
+    let img = if options.normalize_bg {
+        crate::processing::normalize_background(&img)
+    } else {
+        img
+    };
     let (width, height) = img.dimensions();
     let array: Array3<u8> =
         Array3::from_shape_vec((height as usize, width as usize, 3), img.into_raw()).unwrap();

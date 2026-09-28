@@ -52,6 +52,8 @@ pub struct Options {
     pub saturate: bool,
     #[arg(short = 'r', action = clap::ArgAction::SetTrue, default_value = "false")]
     pub return_palette: bool,
+    #[arg(short = 'N', long = "normalize-bg", action = clap::ArgAction::SetTrue)]
+    pub normalize_bg: bool,
 }
 
 impl Default for Options {
@@ -69,6 +71,7 @@ impl Default for Options {
             white_bg: false,
             saturate: true,
             return_palette: false,
+            normalize_bg: false,
         }
     }
 }

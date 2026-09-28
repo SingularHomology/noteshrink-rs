@@ -235,7 +235,192 @@ pub fn apply_palette(
     Array2::from_shape_vec((h, w), labels).unwrap()
 }
 
+fn max_filter_1d(src: &[u8], dst: &mut [u8], len: usize, radius: usize) {
+    for i in 0..len {
+        let start = i.saturating_sub(radius);
+        let end = (i + radius + 1).min(len);
+        let mut m = src[start];
+        for &val in &src[start + 1..end] {
+            if val > m {
+                m = val;
+            }
+        }
+        dst[i] = m;
+    }
+}
+
+fn min_filter_1d(src: &[u8], dst: &mut [u8], len: usize, radius: usize) {
+    for i in 0..len {
+        let start = i.saturating_sub(radius);
+        let end = (i + radius + 1).min(len);
+        let mut m = src[start];
+        for &val in &src[start + 1..end] {
+            if val < m {
+                m = val;
+            }
+        }
+        dst[i] = m;
+    }
+}
+
+fn morph_close_channel(channel: &[u8], w: usize, h: usize, radius: usize) -> Vec<u8> {
+    let mut dilated_h = vec![0u8; w * h];
+    for y in 0..h {
+        let offset = y * w;
+        max_filter_1d(&channel[offset..offset + w], &mut dilated_h[offset..offset + w], w, radius);
+    }
+
+    let mut dilated = vec![0u8; w * h];
+    let mut col_buf = vec![0u8; h];
+    let mut col_out = vec![0u8; h];
+    for x in 0..w {
+        for y in 0..h {
+            col_buf[y] = dilated_h[y * w + x];
+        }
+        max_filter_1d(&col_buf, &mut col_out, h, radius);
+        for y in 0..h {
+            dilated[y * w + x] = col_out[y];
+        }
+    }
+
+    let mut closed_h = vec![0u8; w * h];
+    for y in 0..h {
+        let offset = y * w;
+        min_filter_1d(&dilated[offset..offset + w], &mut closed_h[offset..offset + w], w, radius);
+    }
+
+    let mut closed = vec![0u8; w * h];
+    for x in 0..w {
+        for y in 0..h {
+            col_buf[y] = closed_h[y * w + x];
+        }
+        min_filter_1d(&col_buf, &mut col_out, h, radius);
+        for y in 0..h {
+            closed[y * w + x] = col_out[y];
+        }
+    }
+
+    closed
+}
+
+#[derive(Clone, Copy)]
+struct XCoord {
+    x0: usize,
+    x1: usize,
+    fx: f32,
+}
+
+// Estimates the 2D background illumination surface B(x,y) by running separable
+// morphological closing on a 16x downscaled thumbnail (radius 8, effective 272px window).
+// Then reconstructs full-resolution background channels via bilinear interpolation and
+// inverts lighting via reflectance division: R(x,y) = min(255, (I(x,y) / B(x,y)) * 255).
+pub fn normalize_background(img: &RgbImage) -> RgbImage {
+    let (orig_w, orig_h) = img.dimensions();
+    if orig_w == 0 || orig_h == 0 {
+        return img.clone();
+    }
+
+    let scale = 16u32;
+    let sw = ((orig_w + scale - 1) / scale).max(1) as usize;
+    let sh = ((orig_h + scale - 1) / scale).max(1) as usize;
+
+    let raw = img.as_raw();
+    let mut ch_r = vec![0u8; sw * sh];
+    let mut ch_g = vec![0u8; sw * sh];
+    let mut ch_b = vec![0u8; sw * sh];
+
+    for sy in 0..sh {
+        let y = ((sy as u32 * scale).min(orig_h - 1)) as usize;
+        for sx in 0..sw {
+            let x = ((sx as u32 * scale).min(orig_w - 1)) as usize;
+            let idx = (y * orig_w as usize + x) * 3;
+            let s_idx = sy * sw + sx;
+            ch_r[s_idx] = raw[idx];
+            ch_g[s_idx] = raw[idx + 1];
+            ch_b[s_idx] = raw[idx + 2];
+        }
+    }
+
+    let radius = 8usize;
+    let bg_r = morph_close_channel(&ch_r, sw, sh, radius);
+    let bg_g = morph_close_channel(&ch_g, sw, sh, radius);
+    let bg_b = morph_close_channel(&ch_b, sw, sh, radius);
+
+    let mut x_coords = Vec::with_capacity(orig_w as usize);
+    for x in 0..orig_w {
+        let sx = (x as f32 / scale as f32).min((sw - 1) as f32);
+        let x0 = sx.floor() as usize;
+        let x1 = (x0 + 1).min(sw - 1);
+        let fx = sx - x0 as f32;
+        x_coords.push(XCoord { x0, x1, fx });
+    }
+
+    let mut out_raw = vec![0u8; raw.len()];
+    let row_len = orig_w as usize * 3;
+
+    out_raw
+        .par_chunks_exact_mut(row_len)
+        .enumerate()
+        .for_each(|(y, out_row)| {
+            let in_row = &raw[y * row_len..(y + 1) * row_len];
+            let sy = (y as f32 / scale as f32).min((sh - 1) as f32);
+            let y0 = sy.floor() as usize;
+            let y1 = (y0 + 1).min(sh - 1);
+            let fy = sy - y0 as f32;
+            let row0 = y0 * sw;
+            let row1 = y1 * sw;
+
+            for (x, xc) in x_coords.iter().enumerate() {
+                let px = &in_row[x * 3..x * 3 + 3];
+                let fx = xc.fx;
+
+                let idx00 = row0 + xc.x0;
+                let idx10 = row0 + xc.x1;
+                let idx01 = row1 + xc.x0;
+                let idx11 = row1 + xc.x1;
+
+                let r00 = bg_r[idx00] as f32;
+                let r10 = bg_r[idx10] as f32;
+                let r01 = bg_r[idx01] as f32;
+                let r11 = bg_r[idx11] as f32;
+                let top_r = r00 + fx * (r10 - r00);
+                let bot_r = r01 + fx * (r11 - r01);
+                let br = (top_r + fy * (bot_r - top_r)).max(1.0);
+
+                let g00 = bg_g[idx00] as f32;
+                let g10 = bg_g[idx10] as f32;
+                let g01 = bg_g[idx01] as f32;
+                let g11 = bg_g[idx11] as f32;
+                let top_g = g00 + fx * (g10 - g00);
+                let bot_g = g01 + fx * (g11 - g01);
+                let bg = (top_g + fy * (bot_g - top_g)).max(1.0);
+
+                let b00 = bg_b[idx00] as f32;
+                let b10 = bg_b[idx10] as f32;
+                let b01 = bg_b[idx01] as f32;
+                let b11 = bg_b[idx11] as f32;
+                let top_b = b00 + fx * (b10 - b00);
+                let bot_b = b01 + fx * (b11 - b01);
+                let bb = (top_b + fy * (bot_b - top_b)).max(1.0);
+
+                // Reflectance division: R = min(255, (I / B) * 255) per RGB channel
+                out_row[x * 3] = ((px[0] as f32 / br) * 255.0).min(255.0) as u8;
+                out_row[x * 3 + 1] = ((px[1] as f32 / bg) * 255.0).min(255.0) as u8;
+                out_row[x * 3 + 2] = ((px[2] as f32 / bb) * 255.0).min(255.0) as u8;
+            }
+        });
+
+    ImageBuffer::from_raw(orig_w, orig_h, out_raw).unwrap()
+}
+
 pub fn shrink_image_in_memory(img: &RgbImage, params: &ShrinkParams) -> (RgbImage, Palette) {
+    let normalized;
+    let img = if params.normalize_bg {
+        normalized = normalize_background(img);
+        &normalized
+    } else {
+        img
+    };
     let (width, height) = img.dimensions();
     let array =
         ArrayView3::from_shape((height as usize, width as usize, 3), img.as_raw()).unwrap();

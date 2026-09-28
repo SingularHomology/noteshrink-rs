@@ -105,6 +105,13 @@ where
             };
 
             let params = params_list.get(idx).unwrap_or(&default_params);
+            let normalized;
+            let img = if params.normalize_bg {
+                normalized = crate::processing::normalize_background(img);
+                &normalized
+            } else {
+                img
+            };
             let (width, height) = img.dimensions();
             let array = ArrayView3::from_shape(
                 (height as usize, width as usize, 3),

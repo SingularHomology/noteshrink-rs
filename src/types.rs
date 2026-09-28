@@ -33,6 +33,7 @@ pub struct ShrinkParams {
     pub sample_fraction: usize,
     pub white_bg: bool,
     pub saturate: bool,
+    pub normalize_bg: bool,
 }
 
 impl Default for ShrinkParams {
@@ -44,6 +45,7 @@ impl Default for ShrinkParams {
             sample_fraction: 5,
             white_bg: false,
             saturate: true,
+            normalize_bg: false,
         }
     }
 }
@@ -54,6 +56,7 @@ impl ShrinkParams {
             value_threshold: 40.0,
             sat_threshold: 15.0,
             white_bg: true,
+            normalize_bg: true,
             ..Default::default()
         }
     }
@@ -86,6 +89,7 @@ impl From<&Options> for ShrinkParams {
             sample_fraction: opt.sample_fraction.parse().unwrap_or(5),
             white_bg: opt.white_bg,
             saturate: opt.saturate,
+            normalize_bg: opt.normalize_bg,
         }
     }
 }
@@ -105,6 +109,7 @@ impl From<&ShrinkParams> for Options {
             sample_fraction: params.sample_fraction.to_string(),
             white_bg: params.white_bg,
             saturate: params.saturate,
+            normalize_bg: params.normalize_bg,
             ..Default::default()
         }
     }
