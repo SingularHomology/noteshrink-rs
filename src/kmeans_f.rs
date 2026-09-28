@@ -1,5 +1,9 @@
 use crate::arg::Options;
 
+const BINS: usize = 32 * 32 * 32;
+const MAX_ITER: usize = 40;
+const CONVERGENCE: f32 = 0.1;
+
 struct WeightedPoint {
     color: [f32; 3],
     weight: f32,
@@ -18,6 +22,7 @@ impl SimpleRng {
     }
 }
 
+#[inline(always)]
 fn dist_sq(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     let dr = a[0] - b[0];
     let dg = a[1] - b[1];
@@ -25,12 +30,35 @@ fn dist_sq(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     dr * dr + dg * dg + db * db
 }
 
-pub fn kmeans_precheck(points: &[f64], options: &Options) -> bool {
-    let k = options
+#[inline]
+fn parse_k(options: &Options) -> usize {
+    options
         .num_colors
         .parse::<usize>()
         .unwrap_or(8)
-        .saturating_sub(1);
+        .saturating_sub(1)
+}
+
+#[inline(always)]
+fn nearest_two(centroids: &[[f32; 3]], p: &[f32; 3]) -> (usize, f32, f32) {
+    let mut best = 0usize;
+    let mut best_d = f32::MAX;
+    let mut second_d = f32::MAX;
+    for (j, c) in centroids.iter().enumerate() {
+        let d = dist_sq(p, c);
+        if d < best_d {
+            second_d = best_d;
+            best_d = d;
+            best = j;
+        } else if d < second_d {
+            second_d = d;
+        }
+    }
+    (best, best_d.sqrt(), second_d.sqrt())
+}
+
+pub fn kmeans_precheck(points: &[f64], options: &Options) -> bool {
+    let k = parse_k(options);
     points.is_empty() || k == 0 || points.len() < k * 3
 }
 
@@ -40,68 +68,61 @@ pub fn apply_kmeans(
     options: &Options,
     check: bool,
 ) -> Vec<Vec<u32>> {
+    let bg = vec![bg_color.0 as u32, bg_color.1 as u32, bg_color.2 as u32];
     if check || points.is_empty() {
-        return vec![vec![
-            bg_color.0 as u32,
-            bg_color.1 as u32,
-            bg_color.2 as u32,
-        ]];
+        return vec![bg];
     }
 
     let n = points.len() / 3;
-    let k = (options.num_colors.parse::<usize>().unwrap_or(8) - 1).min(n);
+    let k = parse_k(options).min(n);
     if k == 0 {
-        return vec![vec![
-            bg_color.0 as u32,
-            bg_color.1 as u32,
-            bg_color.2 as u32,
-        ]];
+        return vec![bg];
     }
 
     // Quantize 24-bit RGB space into a 5-bit uniform 3D color cube (32x32x32 = 32,768 bins).
     // Shifting each channel by 3 (dividing by 8) maps [0, 255] into [0, 31].
-    // Packing (br << 10) | (bg << 5) | bb creates a 15-bit linear index into counts and sums.
+    // Interleaving [sum_r, sum_g, sum_b, count] per bin keeps each entry in a single cache line.
     // For each populated cell, we compute its exact barycenter (sums / count) and weight,
     // reducing thousands of raw sampled pixels down to ~500-1,500 unique weighted points.
-    let mut counts = vec![0u32; 32768];
-    let mut sums = vec![[0.0f32; 3]; 32768];
+    let mut bins = vec![[0.0f64; 4]; BINS];
 
-    for chunk in points.chunks_exact(3) {
-        let r = (chunk[0] as f32).clamp(0.0, 255.0);
-        let g = (chunk[1] as f32).clamp(0.0, 255.0);
-        let b = (chunk[2] as f32).clamp(0.0, 255.0);
+    for px in points.chunks_exact(3) {
+        let r = px[0].clamp(0.0, 255.0);
+        let g = px[1].clamp(0.0, 255.0);
+        let b = px[2].clamp(0.0, 255.0);
 
-        let br = (r as usize >> 3).min(31);
-        let bg = (g as usize >> 3).min(31);
-        let bb = (b as usize >> 3).min(31);
-        let idx = (br << 10) | (bg << 5) | bb;
+        let idx = (((r as usize) >> 3) << 10 | ((g as usize) >> 3) << 5 | ((b as usize) >> 3))
+            & (BINS - 1);
 
-        counts[idx] += 1;
-        sums[idx][0] += r;
-        sums[idx][1] += g;
-        sums[idx][2] += b;
+        let bin = &mut bins[idx];
+        bin[0] += r;
+        bin[1] += g;
+        bin[2] += b;
+        bin[3] += 1.0;
     }
 
     let mut weighted: Vec<WeightedPoint> = Vec::with_capacity(2048);
-    for idx in 0..32768 {
-        let count = counts[idx];
-        if count > 0 {
-            let inv = 1.0 / count as f32;
+    for bin in &bins {
+        let count = bin[3];
+        if count > 0.0 {
+            let inv = 1.0 / count;
             weighted.push(WeightedPoint {
-                color: [sums[idx][0] * inv, sums[idx][1] * inv, sums[idx][2] * inv],
+                color: [
+                    (bin[0] * inv) as f32,
+                    (bin[1] * inv) as f32,
+                    (bin[2] * inv) as f32,
+                ],
                 weight: count as f32,
             });
         }
     }
+    drop(bins);
 
-    if weighted.len() <= k {
-        let mut res = Vec::with_capacity(weighted.len() + 1);
-        res.push(vec![
-            bg_color.0 as u32,
-            bg_color.1 as u32,
-            bg_color.2 as u32,
-        ]);
-        for w in weighted {
+    let m = weighted.len();
+    if m <= k {
+        let mut res = Vec::with_capacity(m + 1);
+        res.push(bg);
+        for w in &weighted {
             res.push(vec![
                 w.color[0].round().clamp(0.0, 255.0) as u32,
                 w.color[1].round().clamp(0.0, 255.0) as u32,
@@ -112,188 +133,149 @@ pub fn apply_kmeans(
     }
 
     let mut rng = SimpleRng::new(42);
-    let mut centroids = Vec::with_capacity(k);
-    let mut min_dists = vec![f32::MAX; weighted.len()];
+    let mut centroids: Vec<[f32; 3]> = Vec::with_capacity(k);
+    let mut min_d = vec![f32::MAX; m];
+    let mut cum = vec![0.0f32; m];
 
-    let first_idx = (rng.next_f32() * weighted.len() as f32) as usize % weighted.len();
-    centroids.push(weighted[first_idx].color);
+    let first = ((rng.next_f32() * m as f32) as usize).min(m - 1);
+    centroids.push(weighted[first].color);
 
-    for _ in 1..k {
-        let last_c = centroids.last().unwrap();
-        let mut total_weight = 0.0f32;
-
+    while centroids.len() < k {
+        let last = centroids.last().unwrap();
+        let mut total = 0.0f32;
         for (i, p) in weighted.iter().enumerate() {
-            let d = dist_sq(&p.color, last_c);
-            if d < min_dists[i] {
-                min_dists[i] = d;
+            let d = dist_sq(&p.color, last);
+            if d < min_d[i] {
+                min_d[i] = d;
             }
-            total_weight += p.weight * min_dists[i];
+            total += p.weight * min_d[i];
+            cum[i] = total;
         }
 
-        if total_weight <= 0.0 {
-            centroids.push(weighted[centroids.len() % weighted.len()].color);
+        if total <= 0.0 {
+            let idx = centroids.len() % m;
+            centroids.push(weighted[idx].color);
             continue;
         }
 
-        let threshold = rng.next_f32() * total_weight;
-        let mut cum_weight = 0.0f32;
-        let mut selected = 0;
-
-        for (i, p) in weighted.iter().enumerate() {
-            cum_weight += p.weight * min_dists[i];
-            if cum_weight >= threshold {
-                selected = i;
-                break;
-            }
+        let threshold = rng.next_f32() * total;
+        let mut sel = cum.partition_point(|&c| c < threshold).min(m - 1);
+        while sel + 1 < m && min_d[sel] * weighted[sel].weight == 0.0 {
+            sel += 1;
         }
-
-        centroids.push(weighted[selected].color);
+        centroids.push(weighted[sel].color);
     }
+    drop(min_d);
+    drop(cum);
 
-    let mut assignments = vec![0usize; weighted.len()];
-    let mut uppers = vec![0.0f32; weighted.len()];
-    let mut lowers = vec![f32::MAX; weighted.len()];
-
-    let mut c_dist = vec![vec![0.0f32; k]; k];
-    let mut s_dist = vec![0.0f32; k];
+    let mut assign = vec![0usize; m];
+    let mut upper = vec![0.0f32; m];
+    let mut lower = vec![0.0f32; m];
 
     for (i, p) in weighted.iter().enumerate() {
-        let mut best_c = 0;
-        let mut best_d = f32::MAX;
-        let mut second_d = f32::MAX;
-
-        for (c_idx, c) in centroids.iter().enumerate() {
-            let d = dist_sq(&p.color, c).sqrt();
-            if d < best_d {
-                second_d = best_d;
-                best_d = d;
-                best_c = c_idx;
-            } else if d < second_d {
-                second_d = d;
-            }
-        }
-
-        assignments[i] = best_c;
-        uppers[i] = best_d;
-        lowers[i] = second_d;
+        let (best, bd, sd) = nearest_two(&centroids, &p.color);
+        assign[i] = best;
+        upper[i] = bd;
+        lower[i] = sd;
     }
 
-    let max_iter = 40;
-    let mut new_sums = vec![[0.0f32; 3]; k];
-    let mut new_weights = vec![0.0f32; k];
+    let mut s = vec![0.0f32; k];
+    let mut new_sums = vec![[0.0f64; 3]; k];
+    let mut new_w = vec![0.0f64; k];
     let mut shifts = vec![0.0f32; k];
 
-    for _ in 0..max_iter {
+    for _ in 0..MAX_ITER {
+        s.fill(f32::MAX);
         for a in 0..k {
-            let mut min_c = f32::MAX;
-            for b in 0..k {
-                if a == b {
-                    c_dist[a][b] = 0.0;
-                } else {
-                    let d = 0.5 * dist_sq(&centroids[a], &centroids[b]).sqrt();
-                    c_dist[a][b] = d;
-                    if d < min_c {
-                        min_c = d;
-                    }
+            let ca = &centroids[a];
+            for b in (a + 1)..k {
+                let d = dist_sq(ca, &centroids[b]);
+                if d < s[a] {
+                    s[a] = d;
+                }
+                if d < s[b] {
+                    s[b] = d;
                 }
             }
-            s_dist[a] = min_c;
+        }
+        for v in s.iter_mut() {
+            *v = 0.5 * v.sqrt();
         }
 
-        for i in 0..k {
-            new_sums[i] = [0.0; 3];
-            new_weights[i] = 0.0;
-        }
+        new_sums.fill([0.0; 3]);
+        new_w.fill(0.0);
 
         for (i, p) in weighted.iter().enumerate() {
-            let mut c = assignments[i];
-            let mut u = uppers[i];
+            let mut a = assign[i];
+            let bound = s[a].max(lower[i]);
 
-            if u > s_dist[c] {
-                let mut best_d = dist_sq(&p.color, &centroids[c]).sqrt();
-                u = best_d;
-                let mut second_d = lowers[i];
+            if upper[i] > bound {
+                let exact = dist_sq(&p.color, &centroids[a]).sqrt();
+                upper[i] = exact;
 
-                for j in 0..k {
-                    if j == c {
-                        continue;
-                    }
-
-                    if u > c_dist[c][j] && u > lowers[i] {
-                        let d = dist_sq(&p.color, &centroids[j]).sqrt();
-                        if d < best_d {
-                            second_d = best_d;
-                            best_d = d;
-                            c = j;
-                        } else if d < second_d {
-                            second_d = d;
-                        }
-                    }
+                if exact > bound {
+                    let (best, bd, sd) = nearest_two(&centroids, &p.color);
+                    a = best;
+                    assign[i] = best;
+                    upper[i] = bd;
+                    lower[i] = sd;
                 }
-
-                assignments[i] = c;
-                uppers[i] = best_d;
-                lowers[i] = second_d;
             }
 
-            new_sums[c][0] += p.weight * p.color[0];
-            new_sums[c][1] += p.weight * p.color[1];
-            new_sums[c][2] += p.weight * p.color[2];
-            new_weights[c] += p.weight;
+            let w = p.weight as f64;
+            new_sums[a][0] += w * p.color[0] as f64;
+            new_sums[a][1] += w * p.color[1] as f64;
+            new_sums[a][2] += w * p.color[2] as f64;
+            new_w[a] += w;
         }
 
-        let mut max_shift = 0.0f32;
+        let mut max1 = 0.0f32;
+        let mut max2 = 0.0f32;
+        let mut max1_idx = usize::MAX;
+
         for c in 0..k {
-            if new_weights[c] > 0.0 {
-                let inv_w = 1.0 / new_weights[c];
-                let new_c = [
-                    new_sums[c][0] * inv_w,
-                    new_sums[c][1] * inv_w,
-                    new_sums[c][2] * inv_w,
+            let shift = if new_w[c] > 0.0 {
+                let inv = 1.0 / new_w[c];
+                let nc = [
+                    (new_sums[c][0] * inv) as f32,
+                    (new_sums[c][1] * inv) as f32,
+                    (new_sums[c][2] * inv) as f32,
                 ];
-                let shift = dist_sq(&centroids[c], &new_c).sqrt();
-                shifts[c] = shift;
-                if shift > max_shift {
-                    max_shift = shift;
-                }
-                centroids[c] = new_c;
+                let sh = dist_sq(&centroids[c], &nc).sqrt();
+                centroids[c] = nc;
+                sh
             } else {
-                shifts[c] = 0.0;
+                0.0
+            };
+            shifts[c] = shift;
+            if shift > max1 {
+                max2 = max1;
+                max1 = shift;
+                max1_idx = c;
+            } else if shift > max2 {
+                max2 = shift;
             }
         }
 
-        if max_shift < 0.1 {
+        if max1 < CONVERGENCE {
             break;
         }
 
-        for i in 0..weighted.len() {
-            let c = assignments[i];
-            uppers[i] += shifts[c];
-
-            let mut max_other_shift = 0.0f32;
-            for j in 0..k {
-                if j != c && shifts[j] > max_other_shift {
-                    max_other_shift = shifts[j];
-                }
-            }
-            lowers[i] -= max_other_shift;
+        for i in 0..m {
+            let a = assign[i];
+            upper[i] += shifts[a];
+            lower[i] -= if a == max1_idx { max2 } else { max1 };
         }
     }
 
-    let mut vivec = Vec::with_capacity(k + 1);
-    vivec.push(vec![
-        bg_color.0 as u32,
-        bg_color.1 as u32,
-        bg_color.2 as u32,
-    ]);
-
+    let mut out = Vec::with_capacity(k + 1);
+    out.push(bg);
     for c in centroids {
-        vivec.push(vec![
+        out.push(vec![
             c[0].round().clamp(0.0, 255.0) as u32,
             c[1].round().clamp(0.0, 255.0) as u32,
             c[2].round().clamp(0.0, 255.0) as u32,
         ]);
     }
-
-    vivec
+    out
 }
